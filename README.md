@@ -31,7 +31,7 @@ fine-tuned per property on a dataset of 319 experimentally characterized donor-a
 
 ```
 .
-├── d.csv     # the 319-pair training dataset
+├── dataset     # All the data used in this study and their analysis
 ├── best_models/             # trained model + config for each of the 8 properties
 │   ├── PCE/
 │   ├── V_OC/
