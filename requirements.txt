@@ -1,0 +1,11 @@
+gradio>=6.0
+spaces
+rdkit>=2023.9.1
+scikit-learn==1.7.2
+pandas==2.3.3
+numpy==2.2.5
+joblib==1.5.3
+xgboost==3.2.0
+lightgbm==4.7.0
+catboost==1.2.10
+scipy>=1.10
