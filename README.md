@@ -75,8 +75,6 @@ sklearn builds often cannot load the saved `.joblib` files.
 | `external_test_set.csv` | 35-pair experimental hold-out |
 | `Combined_Dataset.csv` | Combined table with split labels |
 
-If you use the Padula–Troisi pairs independently, cite Padula and Troisi (2019),
-*Advanced Energy Materials*, [10.1002/aenm.201902463](https://doi.org/10.1002/aenm.201902463).
 
 ## Notes and limitations
 
