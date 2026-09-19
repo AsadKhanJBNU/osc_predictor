@@ -1,117 +1,117 @@
 """
-app.py — Predict organic solar cell donor-acceptor pair properties from SMILES alone.
+Predict OSC donor–acceptor properties from SMILES only.
 
-Fully self-contained: no other project files needed besides best_models/ (trained
-models + configs), Examined_Dataset.csv (optional, for reference), and requirements.txt.
+Nine targets, structure-only features (RDKit descriptors, MACCS, compact
+fingerprints, pair interactions). No DFT and no V_OC/J_SC as inputs.
 
 Run:  python app.py
 """
+from __future__ import annotations
+
 import json
-import numpy as np
-import pandas as pd
+import os
+from pathlib import Path
+
 import gradio as gr
 import joblib
-import spaces
+import pandas as pd
 from rdkit import Chem
-from rdkit.Chem import AllChem, rdMolDescriptors, Draw
+from rdkit.Chem import Draw
 from rdkit import RDLogger
-RDLogger.DisableLog('rdApp.*')
 
-# ------------------------------------------------------------------------------------
-# SMILES -> fingerprint featurization (Morgan + Layered + AtomPair)
-# ------------------------------------------------------------------------------------
-NBITS = 1024
+from utils_featurization import (
+    MolFeatureCache,
+    align_to_training_columns,
+    build_molecule_features,
+    build_pair_features,
+)
 
-def to_arr(bitvect, nbits):
-    arr = np.zeros((nbits,), dtype=np.int8)
-    Chem.DataStructs.ConvertToNumpyArray(bitvect, arr)
-    return arr
+RDLogger.DisableLog("rdApp.*")
 
-def fp_morgan(mol):
-    return to_arr(AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=NBITS), NBITS)
+try:
+    import spaces
+except ImportError:  # local run without Hugging Face
+    class spaces:  # type: ignore
+        @staticmethod
+        def GPU(fn):
+            return fn
 
-def fp_layered(mol):
-    return to_arr(Chem.LayeredFingerprint(mol, fpSize=NBITS), NBITS)
+ROOT = Path(__file__).resolve().parent
+MODEL_DIR = ROOT / "best_models"
 
-def fp_atompair(mol):
-    return to_arr(rdMolDescriptors.GetHashedAtomPairFingerprintAsBitVect(mol, nBits=NBITS), NBITS)
-
-FP_FUNCS = {'morgan': fp_morgan, 'layered': fp_layered, 'atompair': fp_atompair}
-
-
-def build_fingerprints_for_column(smiles_series, fp_name, side_prefix):
-    func = FP_FUNCS[fp_name]
-    mols = [Chem.MolFromSmiles(s) for s in smiles_series]
-    fps = np.vstack([func(m) if m is not None else np.zeros(NBITS, dtype=np.int8) for m in mols])
-    cols = [f'{side_prefix}_{fp_name}_{i}' for i in range(NBITS)]
-    return pd.DataFrame(fps, columns=cols, index=smiles_series.index)
-
-
-def build_all_fingerprints(donor_smiles, acceptor_smiles):
-    parts = []
-    for fp_name in FP_FUNCS:
-        parts.append(build_fingerprints_for_column(donor_smiles, fp_name, 'D'))
-        parts.append(build_fingerprints_for_column(acceptor_smiles, fp_name, 'A'))
-    return pd.concat(parts, axis=1)
-
-
-def align_to_training_columns(X_new, training_feature_columns):
-    return X_new.reindex(columns=training_feature_columns, fill_value=0)
-
-ALL_TARGETS = ['PCE', 'V_OC', 'J_SC', 'HOMO_D', 'Lambda+', 'HOMO_A', 'LUMO_A', 'Lambda-']
+PAIR_TARGETS = ["V_OC", "J_SC", "PCE"]
+DONOR_TARGETS = ["HOMO_D", "LUMO_D", "Lambda+"]
+ACCEPTOR_TARGETS = ["HOMO_A", "LUMO_A", "Lambda-"]
+ALL_TARGETS = PAIR_TARGETS + DONOR_TARGETS + ACCEPTOR_TARGETS
 
 UNITS = {
-    'PCE': '%', 'V_OC': 'V', 'J_SC': 'mA/cm2',
-    'HOMO_D': 'eV', 'Lambda+': 'eV', 'HOMO_A': 'eV', 'LUMO_A': 'eV', 'Lambda-': 'eV',
+    "V_OC": "V",
+    "J_SC": "mA cm⁻²",
+    "PCE": "%",
+    "HOMO_D": "eV",
+    "LUMO_D": "eV",
+    "HOMO_A": "eV",
+    "LUMO_A": "eV",
+    "Lambda+": "eV",
+    "Lambda-": "eV",
 }
 DESCRIPTIONS = {
-    'PCE': 'Power Conversion Efficiency',
-    'V_OC': 'Open-Circuit Voltage',
-    'J_SC': 'Short-Circuit Current',
-    'HOMO_D': 'Donor HOMO Energy',
-    'Lambda+': 'Donor Reorganization Energy',
-    'HOMO_A': 'Acceptor HOMO Energy',
-    'LUMO_A': 'Acceptor LUMO Energy',
-    'Lambda-': 'Acceptor Reorganization Energy',
+    "V_OC": "Open-circuit voltage",
+    "J_SC": "Short-circuit current density",
+    "PCE": "Power conversion efficiency",
+    "HOMO_D": "Donor HOMO energy",
+    "LUMO_D": "Donor LUMO energy",
+    "HOMO_A": "Acceptor HOMO energy",
+    "LUMO_A": "Acceptor LUMO energy",
+    "Lambda+": "Donor reorganization energy (λ+)",
+    "Lambda-": "Acceptor reorganization energy (λ−)",
 }
 
+# Hold-out examples used in the paper (PDTBTBO:ITIC, PSFTZ:Y6, D18:BTP-Th).
+EXAMPLE_1 = (
+    "CCCCCCC(CCCC)COc1c(OCC(CCCC)CCCCCC)c(-c2ccc(-c3ccc(C)s3)s2)c2nsnc2c1C",
+    "CCCCCCc1ccc(C2(c3ccc(CCCCCC)cc3)c3cc4c(cc3-c3sc5cc(/C=C6\\C(=O)c7ccccc7C6=C(C#N)C#N)sc5c32)C(c2ccc(CCCCCC)cc2)(c2ccc(CCCCCC)cc2)c2c-4sc3cc(/C=C4\\C(=O)c5ccccc5C4=C(C#N)C#N)sc23)cc1",
+)
+EXAMPLE_2 = (
+    "CCCCCCCCc1cc(-c2nnc(-c3cc(CCCCCCCC)c(-c4cc5c(-c6cc(F)c(SCC(CCCC)CCCCCC)s6)c6sc(C)cc6c(-c6cc(F)c(SCC(CCCC)CCCCCC)s6)c5s4)s3)nn2)sc1C",
+    "CCCCCCCCCCCc1c(/C=C2\\C(=O)c3cc(F)c(F)cc3C2=C(C#N)C#N)sc2c1sc1c3c4nsnc4c4c5sc6c(CCCCCCCCCCC)c(/C=C7\\C(=O)c8cc(F)c(F)cc8C7=C(C#N)C#N)sc6c5n(CC(CC)CCCC)c4c3n(CC(CC)CCCC)c21",
+)
+EXAMPLE_3 = (
+    "CCCCCCC(CCCC)Cc1csc(-c2cc3c4nsnc4c4cc(-c5cc(CC(CCCC)CCCCCC)c(-c6cc7c(-c8cc(F)c(CC(CC)CCCC)s8)c8sccc8c(-c8cc(F)c(CC(CC)CCCC)s8)c7s6)s5)sc4c3s2)c1",
+    "CCCCCCc1ccc(-c2c(/C=C3\\C(=O)c4cc(F)c(F)cc4C3=C(C#N)C#N)sc3c2sc2c4c5nsnc5c5c6sc7c(-c8ccc(CCCCCC)s8)c(/C=C8\\C(=O)c9cc(F)c(F)cc9C8=C(C#N)C#N)sc7c6n(CC(CCCC)CCCCCC)c5c4n(CC(CCCC)CCCCCC)c32)s1",
+)
+
 MOL_IMG_SIZE = (340, 280)
-
-# Three example donor/acceptor pairs, pulled directly from the dataset. Clicking a
-# button below fills the two SMILES boxes directly with these values.
-EXAMPLE_1 = ("CCc1ccsc1-c1cc(CC)c(-c2sccc2CC)s1",
-             "CCC1c2ccccc2-c2cc3c4cccc5c4c(c3cc21)c1cccc2c3cc4c(cc3c5c21)C(CC)c1ccccc1-4")
-EXAMPLE_2 = ("CCc1ccsc1-c1cc(CC)c(-c2sccc2CC)s1",
-             "CCN1C(=O)c2ccc(C=Cc3ccc(C=Cc4ccc5c(c4)C(=O)N(CC)C5=O)c4nsnc34)cc2C1=O")
-EXAMPLE_3 = ("CCc1ccsc1-c1cc(CC)c(-c2sccc2CC)s1",
-             "C=c1c(=Cc2ccc(-c3cc4c(s3)-c3cc5c(cc3C4(CC)CC)-c3sc(-c4ccc(C=c6sc(=S)n(CC)c6=C)c6nsnc46)cc3C5(CC)CC)c3nsnc23)sc(=S)n1CC")
-
-
-# ------------------------------------------------------------------------------------
-# Model loading (cached after first use per target)
-# ------------------------------------------------------------------------------------
 _CACHE = {}
+_FEAT_CACHE = MolFeatureCache()
+
 
 def _load_target(target):
     if target in _CACHE:
         return _CACHE[target]
-    with open(f'best_models/{target}/run_config.json') as f:
+    cfg_path = MODEL_DIR / target / "run_config.json"
+    model_path = MODEL_DIR / target / "best_model.joblib"
+    with cfg_path.open(encoding="utf-8") as f:
         cfg = json.load(f)
-    model = joblib.load(f"best_models/{cfg['best_model_file']}")
+    model = joblib.load(model_path)
     _CACHE[target] = (cfg, model)
     return cfg, model
 
 
-def _predict_with_model(loaded_model, X):
-    """Handles both plain sklearn-style models and the custom stacking bundle
-    ({'is_stack_bundle': True, 'base_models': ..., 'meta_model': ...})."""
-    if isinstance(loaded_model, dict) and loaded_model.get('is_stack_bundle'):
-        base_preds = np.column_stack([
-            loaded_model['base_models'][n].predict(X.values) for n in loaded_model['top3_model_names']
-        ])
-        return loaded_model['meta_model'].predict(base_preds)[0]
+def _predict_one(model, X):
+    import numpy as np
+
+    Xv = np.asarray(X, dtype=float)
+    if hasattr(X, "to_numpy"):
+        Xv = X.to_numpy(dtype=float, copy=False)
+    if isinstance(model, dict) and model.get("is_stack_bundle"):
+        base = np.column_stack(
+            [model["base_models"][n].predict(Xv) for n in model["top3_model_names"]]
+        )
+        pred = model["meta_model"].predict(base)
     else:
-        return loaded_model.predict(X)[0]
+        pred = model.predict(Xv)
+    return float(pred[0])
 
 
 def _mol_image(smiles):
@@ -121,56 +121,52 @@ def _mol_image(smiles):
     return Draw.MolToImage(mol, size=MOL_IMG_SIZE)
 
 
-# ------------------------------------------------------------------------------------
-# Main prediction function
-# ------------------------------------------------------------------------------------
-@spaces.GPU
+def _features_for(target, donor, acceptor):
+    d = pd.Series([donor])
+    a = pd.Series([acceptor])
+    if target in PAIR_TARGETS:
+        return build_pair_features(d, a, _FEAT_CACHE)
+    if target in DONOR_TARGETS:
+        return build_molecule_features(d, "D_", _FEAT_CACHE)
+    return build_molecule_features(a, "A_", _FEAT_CACHE)
+
+
 @spaces.GPU
 def _zerogpu_startup_check():
-    """
-    Unused placeholder. This Space runs on ZeroGPU hardware, which requires at least
-    one @spaces.GPU-decorated function to exist so HF's startup check passes. All real
-    prediction work below runs as ordinary CPU Python (no GPU needed for sklearn/
-    XGBoost/LightGBM/CatBoost inference) and does NOT go through this decorator, to
-    avoid routing simple CPU calls through ZeroGPU's GPU-allocation subprocess.
-    """
+    """Placeholder so Hugging Face ZeroGPU Spaces pass the GPU-function check."""
     return None
 
 
 def predict_multi(donor_smiles, acceptor_smiles, selected_targets):
-    donor_smiles = (donor_smiles or '').strip()
-    acceptor_smiles = (acceptor_smiles or '').strip()
-    empty_df = pd.DataFrame(columns=["Property", "Description", "Predicted Value", "Unit", "Model"])
+    donor_smiles = (donor_smiles or "").strip()
+    acceptor_smiles = (acceptor_smiles or "").strip()
+    empty = pd.DataFrame(columns=["Property", "Description", "Predicted Value", "Unit", "Model"])
 
     if not donor_smiles or not acceptor_smiles:
-        return None, None, empty_df, "Please enter both donor and acceptor SMILES."
+        return None, None, empty, "Please enter both donor and acceptor SMILES."
 
     donor_img = _mol_image(donor_smiles)
     if donor_img is None:
-        return None, None, empty_df, "Donor SMILES could not be parsed. Please check it."
+        return None, None, empty, "Donor SMILES could not be parsed. Please check it."
 
     acceptor_img = _mol_image(acceptor_smiles)
     if acceptor_img is None:
-        return donor_img, None, empty_df, "Acceptor SMILES could not be parsed. Please check it."
+        return donor_img, None, empty, "Acceptor SMILES could not be parsed. Please check it."
 
     if not selected_targets:
-        return donor_img, acceptor_img, empty_df, "Please select at least one property to predict."
-
-    donor_series = pd.Series([donor_smiles])
-    acceptor_series = pd.Series([acceptor_smiles])
-    X_raw = build_all_fingerprints(donor_series, acceptor_series)
+        return donor_img, acceptor_img, empty, "Please select at least one property to predict."
 
     rows = []
     for target in selected_targets:
         cfg, model = _load_target(target)
-        X = align_to_training_columns(X_raw, cfg['feature_columns'])
-        pred = _predict_with_model(model, X)
+        X = align_to_training_columns(_features_for(target, donor_smiles, acceptor_smiles), cfg["feature_columns"])
+        pred = _predict_one(model, X)
         rows.append({
             "Property": target,
             "Description": DESCRIPTIONS.get(target, ""),
             "Predicted Value": f"{pred:.4f}",
             "Unit": UNITS.get(target, ""),
-            "Model": cfg['best_model_name'],
+            "Model": cfg.get("best_model_name", ""),
         })
 
     df = pd.DataFrame(rows)
@@ -182,9 +178,6 @@ def fill_example(example):
     return example[0], example[1]
 
 
-# ------------------------------------------------------------------------------------
-# UI — plain, minimal, no icons
-# ------------------------------------------------------------------------------------
 CUSTOM_CSS = """
 .gradio-container {max-width: 980px !important; margin: auto; font-family: 'Inter', -apple-system, sans-serif;}
 h1 {font-weight: 600 !important; font-size: 1.6em !important; margin-bottom: 0.1em !important;}
@@ -211,10 +204,10 @@ theme = gr.themes.Default(
 )
 
 with gr.Blocks(title="OSC Property Predictor") as demo:
-    gr.Markdown("# Organic Solar Cell Donor-Acceptor Property Predictor")
+    gr.Markdown("# Organic Solar Cell Donor–Acceptor Property Predictor")
     gr.Markdown(
-        "Predict electronic and photovoltaic properties of a donor-acceptor pair directly from "
-        "molecular structure, without DFT calculation or device fabrication.",
+        "Predict nine electronic and photovoltaic properties of a donor–acceptor pair "
+        "from SMILES only — no DFT and no device measurements as inputs.",
         elem_id="subtitle",
     )
 
@@ -225,9 +218,9 @@ with gr.Blocks(title="OSC Property Predictor") as demo:
             acceptor = gr.Textbox(label="Acceptor SMILES", placeholder="Enter acceptor SMILES")
 
             with gr.Row():
-                ex1_btn = gr.Button("Example 1", elem_classes="example-btn", size="sm")
-                ex2_btn = gr.Button("Example 2", elem_classes="example-btn", size="sm")
-                ex3_btn = gr.Button("Example 3", elem_classes="example-btn", size="sm")
+                ex1_btn = gr.Button("PDTBTBO:ITIC", elem_classes="example-btn", size="sm")
+                ex2_btn = gr.Button("PSFTZ:Y6", elem_classes="example-btn", size="sm")
+                ex3_btn = gr.Button("D18:BTP-Th", elem_classes="example-btn", size="sm")
 
             gr.Markdown("Properties to predict", elem_classes="section-title")
             targets = gr.CheckboxGroup(
@@ -262,18 +255,23 @@ with gr.Blocks(title="OSC Property Predictor") as demo:
     gr.Markdown(
         """
         ---
-        Predictions are estimates from machine-learning models trained on a dataset of 319
-        experimentally characterized donor-acceptor pairs, and should be treated as a
-        pre-synthesis screening aid rather than a substitute for DFT calculation or experimental
-        measurement. See the accompanying paper for per-property accuracy (R2) and a discussion
-        of limitations.
+        Models were trained on 2,356 literature donor–acceptor pairs with SMILES-only
+        features. Device targets use regularized linear models (Ridge / ElasticNet);
+        orbital and reorganization-energy targets use k-NN or Extra Trees. Predictions
+        are a pre-synthesis screening aid, not a substitute for fabrication. See the
+        accompanying paper for per-property *R*², residual shrinkage, and the 35-pair
+        experimental hold-out.
         """
     )
 
 if __name__ == "__main__":
-    import os
     if os.environ.get("SPACE_ID"):
         demo.launch(theme=theme, css=CUSTOM_CSS)
     else:
-        demo.launch(server_name="127.0.0.1", server_port=7860, show_error=True,
-                    theme=theme, css=CUSTOM_CSS)
+        demo.launch(
+            server_name="127.0.0.1",
+            server_port=7860,
+            show_error=True,
+            theme=theme,
+            css=CUSTOM_CSS,
+        )

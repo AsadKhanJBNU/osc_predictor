@@ -1,0 +1,36 @@
+{
+  "n_padula": 319,
+  "n_opvdb": 1865,
+  "n_holdout": 35,
+  "n_holdout_after_2024": 133,
+  "n_training": 2317,
+  "n_total": 2352,
+  "n_donors": 889,
+  "n_acceptors": 943,
+  "year_min": 2019.0,
+  "year_max": 2026.0,
+  "n_labeled_training": {
+    "V_OC": 2184,
+    "J_SC": 2184,
+    "PCE": 2184,
+    "HOMO_D": 2184,
+    "LUMO_D": 2184,
+    "Lambda+": 319,
+    "HOMO_A": 2184,
+    "LUMO_A": 2184,
+    "Lambda-": 319
+  },
+  "files": {
+    "padula": "Examined_Dataset.csv",
+    "opvdb": "Examined_Dataset_1.csv",
+    "holdout": "external_test_set.csv",
+    "holdout_after_2024": "external_test_set_after_2024.csv",
+    "combined": "Combined_Dataset.csv"
+  },
+  "notes": {
+    "device_labels": "experimental in both sources",
+    "orbitals_padula": "DFT",
+    "orbitals_opvdb": "electrochemical; not mixed with DFT in model training",
+    "lambda": "Padula-Troisi only"
+  }
+}

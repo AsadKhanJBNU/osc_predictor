@@ -1,47 +1,44 @@
-# OSC Donor-Acceptor Property Predictor
+# OSC Donor–Acceptor Property Predictor
 
-Predicts electronic and photovoltaic properties of organic solar cell donor-acceptor pairs
-**directly from molecular structure (SMILES)** — no DFT calculation or device fabrication
-required.
+Predicts **nine** electronic and photovoltaic properties of organic solar cell
+donor–acceptor pairs **directly from SMILES** — no DFT and no device measurements
+as inputs.
 
 **Try it live:** https://huggingface.co/spaces/AsadWazir/osc_predictor
 
 ## About
 
-This repository provides a trained machine-learning framework that predicts eight properties
-of a donor-acceptor pair from just the donor and acceptor SMILES strings:
+Selected models from the combined SMILES-only pipeline:
 
-| Property | Description |
-|---|---|
-| PCE | Power Conversion Efficiency |
-| V_OC | Open-Circuit Voltage |
-| J_SC | Short-Circuit Current |
-| HOMO_D | Donor HOMO Energy |
-| Lambda+ | Donor Reorganization Energy |
-| HOMO_A | Acceptor HOMO Energy |
-| LUMO_A | Acceptor LUMO Energy |
-| Lambda- | Acceptor Reorganization Energy |
+| Property | Description | Selected model | Test *R*² |
+|---|---|---|---|
+| V_OC | Open-circuit voltage | ElasticNet | 45.8% |
+| J_SC | Short-circuit current | ElasticNet | 69.5% |
+| PCE | Power conversion efficiency | Ridge | 61.2% |
+| HOMO_D | Donor HOMO | k-NN | 18.5% |
+| LUMO_D | Donor LUMO | Extra Trees | 39.1% |
+| HOMO_A | Acceptor HOMO | k-NN | 52.5% |
+| LUMO_A | Acceptor LUMO | ElasticNet | 30.8% |
+| Lambda+ | Donor reorganization energy | Extra Trees | 43.0% |
+| Lambda- | Acceptor reorganization energy | Extra Trees | 63.8% |
 
-Molecular fingerprints (Morgan + Layered + AtomPair) are computed from SMILES and used with
-ensemble tree models (CatBoost, XGBoost, LightGBM, Random Forest, Extra Trees, Gradient
-Boosting, HistGradientBoosting, and a stacking ensemble of the best-performing models) —
-fine-tuned per property on a dataset of 319 experimentally characterized donor-acceptor pairs.
+Features are RDKit 2D descriptors, MACCS keys, compact Morgan / AtomPair / Layered
+fingerprints (256 bits), and donor–acceptor interaction terms. Device targets are
+trained on 2,296 pairs after physical-range filtering of a 2,356-pair literature
+corpus. Orbital models use unique-molecule electrochemical labels; λ+ / λ− use
+the DFT-labelled Padula–Troisi subset only.
+
+On a 35-pair experimental hold-out (SMILES-pair identity excluded from training),
+PCE *R*² = 60.5% (MAE = 2.80%).
 
 ## Repository contents
 
 ```
 .
-├── dataset     # All the data used in this study and their analysis
-├── best_models/             # trained model + config for each of the 8 properties
-│   ├── PCE/
-│   ├── V_OC/
-│   ├── J_SC/
-│   ├── HOMO_D/
-│   ├── Lambda+/
-│   ├── HOMO_A/
-│   ├── LUMO_A/
-│   └── Lambda-/
-├── app.py                   # self-contained prediction app (no other .py files needed)
+├── Dataset/                 # Padula–Troisi + OPV-DB + 35-pair hold-out
+├── best_models/             # selected model + config for each of 9 targets
+├── app.py                   # Gradio predictor
+├── utils_featurization.py   # SMILES-only feature builder (must match training)
 └── requirements.txt
 ```
 
@@ -54,41 +51,41 @@ pip install -r requirements.txt
 python app.py
 ```
 
-This launches a local web interface (Gradio) at `http://127.0.0.1:7860`. Enter a donor SMILES
-and an acceptor SMILES, select which of the 8 properties to predict, and click **Predict**.
-Example donor-acceptor pairs are provided as quick-fill buttons in the interface.
+Opens a local Gradio app at `http://127.0.0.1:7860`. Example pairs from the
+paper hold-out (PDTBTBO:ITIC, PSFTZ:Y6, D18:BTP-Th) are filled by the buttons.
 
 ## Requirements
 
-See `requirements.txt` for exact pinned versions. Core dependencies:
+See `requirements.txt`. Core dependencies:
 
-- **RDKit** — molecular fingerprint generation from SMILES
-- **scikit-learn, XGBoost, LightGBM, CatBoost** — the trained model backends
-- **Gradio** — the web interface
-- **pandas, numpy, joblib, scipy** — supporting data/model handling
+- **RDKit** — descriptors and fingerprints from SMILES
+- **scikit-learn, joblib** — Ridge, ElasticNet, k-NN, Extra Trees inference
+- **Gradio** — web interface
+- **pandas, numpy** — tables and arrays
 
-Library versions in `requirements.txt` are pinned to match those used during model training.
-Installing different (especially newer) versions of scikit-learn, XGBoost, LightGBM, or
-CatBoost than what's listed **may cause the saved models to fail to load**, since these
-libraries do not always guarantee backward compatibility for pickled/serialized models across
-versions. If you hit a loading error, first confirm your installed versions exactly match
-`requirements.txt`.
+Pin **scikit-learn** to the version in `requirements.txt`. Newer or older
+sklearn builds often cannot load the saved `.joblib` files.
 
 ## Dataset
 
-`Examined_Dataset.csv` contains 319 experimentally characterized donor-acceptor pairs (262
-distinct donors, 76 distinct acceptors), originally compiled by Padula and Troisi (2019),
-*Advanced Energy Materials*, ["Concurrent Optimization of Organic Donor-Acceptor Pairs through
-Machine Learning"](https://doi.org/10.1002/aenm.201902463). Please cite the original source if
-you use this dataset independently of this repository.
+| File | Contents |
+|---|---|
+| `Examined_Dataset.csv` | 319 Padula–Troisi pairs (device metrics experimental; orbitals/λ DFT) |
+| `Examined_Dataset_1.csv` | OPV-DB literature pairs (device + electrochemical orbitals) |
+| `external_test_set.csv` | 35-pair experimental hold-out |
+| `Combined_Dataset.csv` | Combined table with split labels |
+
+If you use the Padula–Troisi pairs independently, cite Padula and Troisi (2019),
+*Advanced Energy Materials*, [10.1002/aenm.201902463](https://doi.org/10.1002/aenm.201902463).
 
 ## Notes and limitations
 
-- Predictions are estimates from models trained on a relatively small (319-pair) experimental
-  dataset, and should be treated as a **pre-synthesis screening aid**, not a substitute for DFT
-  calculation or experimental measurement.
-- Accuracy varies substantially by property — donor-only and acceptor-only electronic
-  properties (e.g. HOMO_D) are generally predicted more reliably than device-level properties
-  (e.g. V_OC), which depend on factors beyond molecular structure alone (morphology,
-  processing conditions). See the accompanying paper for detailed per-property accuracy (R²)
-  and discussion.
+- Use the models to **screen** donor–acceptor combinations, not to replace
+  device fabrication.
+- Predictions shrink toward the mean: low values are over-predicted and high
+  values are under-predicted. Extreme PCE / *J*_SC estimates are rankings, not
+  calibrated device forecasts.
+- Hold-out exclusion is at the **pair** SMILES level. A donor or acceptor may
+  still appear in training with a different partner.
+- HOMO_D is the weakest target (*R*² = 18.5% on the modelling test split).
+- λ+ / λ− have no labels on the 35-pair hold-out.

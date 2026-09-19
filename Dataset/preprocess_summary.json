@@ -1,0 +1,21 @@
+{
+  "n_raw_concat": 2356,
+  "n_dropped_holdout_overlap": 0,
+  "n_dropped_bad_smiles": 0,
+  "n_clean_pairs": 2356,
+  "n_source_a": 319,
+  "n_source_b": 2037,
+  "unique_donors": 877,
+  "unique_acceptors": 940,
+  "n_labeled": {
+    "V_OC": 2356,
+    "J_SC": 2356,
+    "PCE": 2356,
+    "HOMO_D": 2356,
+    "LUMO_D": 2356,
+    "Lambda+": 319,
+    "HOMO_A": 2356,
+    "LUMO_A": 2356,
+    "Lambda-": 319
+  }
+}
